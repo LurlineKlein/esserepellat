@@ -1,0 +1,23 @@
+{
+  "name": "esserepellat",
+  "description": "Gelato Network orders library",
+  "main": "index.js",
+  "author": "CandaceSipes",
+  "license": "GPL-3.0-only",
+  "devDependencies": {
+    "husky": "^7.0.0",
+    "lerna": "^4.0.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LurlineKlein/esserepellat.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LurlineKlein/esserepellat.git/issues"
+  },
+  "homepage": "https://github.com/LurlineKlein/esserepellat.git",
+  "version": "1.5.2"
+}

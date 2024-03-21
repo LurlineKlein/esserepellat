@@ -1,0 +1,595 @@
+import React, { useCallback, useMemo, useState } from "react";
+import styled, { DefaultTheme } from "styled-components/macro";
+import { darken } from "polished";
+import { ArrowRight } from "react-feather";
+import { Text } from "rebass";
+import { RowBetween } from "../../Row";
+import { Order, constants } from "@gelatonetwork/limit-orders-lib";
+import useTheme from "../../../hooks/useTheme";
+import { useCurrency } from "../../../hooks/Tokens";
+import CurrencyLogo from "../../CurrencyLogo";
+import { useGelatoLimitOrdersHandlers } from "../../../hooks/gelato";
+import { CurrencyAmount, Price } from "@uniswap/sdk-core";
+import ConfirmCancellationModal from "../ConfirmCancellationModal";
+import { useTradeExactIn } from "../../../hooks/useTrade";
+import { Dots } from "../../order/styleds";
+import { isTransactionCostDependentChain } from "@gelatonetwork/limit-orders-lib/dist/utils";
+import { useWeb3 } from "../../../web3";
+import { ButtonGray } from "../../Button";
+import { useIsTransactionPending } from "../../../state/gtransactions/hooks";
+import {
+  ExplorerDataType,
+  getExplorerLink,
+} from "../../../utils/getExplorerLink";
+import TradePrice from "../../order/TradePrice";
+import useGelatoLimitOrdersLib from "../../../hooks/gelato/useGelatoLimitOrdersLib";
+import useGasOverhead from "../../../hooks/useGasOverhead";
+import { MouseoverTooltip } from "../../Tooltip";
+import { TYPE } from "../../../theme";
+import HoverInlineText from "../../HoverInlineText";
+import { formatUnits } from "@ethersproject/units";
+
+const handleColorType = (status: string, theme: DefaultTheme) => {
+  switch (status) {
+    case "open":
+      return theme.blue1;
+    case "executed":
+      return theme.green1;
+    case "cancelled":
+      return theme.red1;
+
+    case "pending":
+      return theme.yellow1;
+
+    default:
+      return theme.text3;
+  }
+};
+
+const OrderPanel = styled.div`
+  ${({ theme }) => theme.flexColumnNoWrap}
+  position: relative;
+  border-radius: "16px";
+  background-color: ${() => "transparent"};
+  z-index: 1;
+  width: "100%";
+`;
+
+const Container = styled.div<{ hideInput: boolean }>`
+  border-radius: ${({ hideInput }) => (hideInput ? "16px" : "20px")};
+  border: 1px solid
+    ${({ theme, hideInput }) => (hideInput ? " transparent" : theme.bg2)};
+  background-color: ${({ theme }) => theme.bg1};
+  width: ${({ hideInput }) => (hideInput ? "100%" : "initial")};
+  :focus,
+  :hover {
+    border: 1px solid
+      ${({ theme, hideInput }) => (hideInput ? " transparent" : theme.bg3)};
+  }
+`;
+
+const LabelRow = styled.div`
+  ${({ theme }) => theme.flexRowNoWrap}
+  align-items: center;
+  color: ${({ theme }) => theme.text1};
+  font-size: 0.75rem;
+  line-height: 1rem;
+  padding: 0 1rem 1rem;
+  span:hover {
+    cursor: pointer;
+    color: ${({ theme }) => darken(0.2, theme.text2)};
+  }
+`;
+
+const Aligner = styled.span`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+`;
+
+const StyledTokenName = styled.span<{ active?: boolean }>`
+  ${({ active }) =>
+    active
+      ? "  margin: 0 0.25rem 0 0.25rem;"
+      : "  margin: 0 0.25rem 0 0.25rem;"}
+  font-size:  ${({ active }) => (active ? "14px" : "14px")};
+`;
+
+const OrderRow = styled(LabelRow)`
+  justify-content: flex-end;
+`;
+
+const OrderStatus = styled.span<{ status: string; clickable: boolean }>`
+  font-size: 0.825rem;
+  font-weight: 600;
+  padding: 0.5rem;
+  border-radius: 8px;
+  cursor: ${({ clickable }) => (clickable ? "pointer" : "default")};
+  color: ${({ status, theme }) => handleColorType(status, theme)};
+  border: 1px solid ${({ status, theme }) => handleColorType(status, theme)};
+  width: fit-content;
+  justify-self: flex-end;
+  text-transform: uppercase;
+  :hover {
+    content: "Reply!";
+    border: 1px solid
+      ${({ status, theme, clickable }) =>
+        clickable
+          ? handleColorType("cancelled", theme)
+          : handleColorType(status, theme)};
+
+    color: ${({ status, theme, clickable }) =>
+      clickable
+        ? handleColorType("cancelled", theme)
+        : handleColorType(status, theme)};
+  }
+`;
+
+export const ArrowWrapper = styled.div`
+  padding: 4px;
+  border-radius: 12px;
+  height: 32px;
+  width: 32px;
+  margin-right: 2px;
+  margin-left: -10px;
+  background-color: ${({ theme }) => theme.bg1};
+  border: 4px solid ${({ theme }) => theme.bg1};
+`;
+
+const CurrencySelect = styled(ButtonGray)<{
+  selected: boolean;
+  hideInput?: boolean;
+}>`
+  align-items: center;
+  font-size: 24px;
+  font-weight: 500;
+  background-color: ${({ selected, theme }) =>
+    selected ? theme.bg0 : theme.primary1};
+  color: ${({ selected, theme }) => (selected ? theme.text1 : theme.white)};
+  border-radius: 16px;
+  box-shadow: ${({ selected }) =>
+    selected ? "none" : "0px 6px 10px rgba(0, 0, 0, 0.075)"};
+  box-shadow: 0px 6px 10px rgba(0, 0, 0, 0.075);
+  outline: none;
+  cursor: default;
+  user-select: none;
+  border: none;
+  height: ${({ hideInput }) => (hideInput ? "2.8rem" : "2.4rem")};
+  width: ${({ hideInput }) => (hideInput ? "100%" : "initial")};
+  padding: 0 8px;
+  justify-content: space-between;
+  margin-right: ${({ hideInput }) => (hideInput ? "0" : "12px")};
+  &:focus {
+    box-shadow: 0px 6px 10px rgba(0, 0, 0, 0.075);
+    background-color: ${({ selected, theme }) =>
+      selected ? theme.bg0 : theme.primary1};
+  }
+  :hover {
+    background-color: ${({ selected, theme }) =>
+      selected ? theme.bg0 : theme.primary1};
+  }
+`;
+
+const Spacer = styled.div`
+  flex: 1 1 auto;
+`;
+
+export default function OrderCard({ order }: { order: Order }) {
+  const theme = useTheme();
+
+  const { chainId, handler } = useWeb3();
+
+  const [
+    showExecutionPriceInverted,
+    setShowExecutionPriceInverted,
+  ] = useState<boolean>(false);
+  const [
+    showRealExecutionPriceInverted,
+    setShowRealExecutionPriceInverted,
+  ] = useState<boolean>(true);
+  const [
+    showCurrentPriceInverted,
+    setShowCurrentPriceInverted,
+  ] = useState<boolean>(true);
+
+  const { handleLimitOrderCancellation } = useGelatoLimitOrdersHandlers();
+
+  const gelatoLibrary = useGelatoLimitOrdersLib();
+
+  const inputToken = useCurrency(order.inputToken);
+  const outputToken = useCurrency(order.outputToken);
+
+  const inputAmount = useMemo(
+    () =>
+      inputToken && order.inputAmount
+        ? CurrencyAmount.fromRawAmount(inputToken, order.inputAmount)
+        : undefined,
+    [inputToken, order.inputAmount]
+  );
+
+  const isTransactionCostDependentChainBool =
+    chainId && isTransactionCostDependentChain(chainId);
+
+  const rawMinReturn = useMemo(
+    () =>
+      order.adjustedMinReturn
+        ? order.adjustedMinReturn
+        : gelatoLibrary && chainId && order.minReturn
+        ? gelatoLibrary.getAdjustedMinReturn(order.minReturn)
+        : undefined,
+    [
+      chainId,
+      gelatoLibrary,
+      order.adjustedMinReturn,
+      order.minReturn,
+      isTransactionCostDependentChainBool,
+    ]
+  );
+
+  const outputAmount = useMemo(
+    () =>
+      outputToken && rawMinReturn
+        ? CurrencyAmount.fromRawAmount(outputToken, rawMinReturn)
+        : undefined,
+    [outputToken, rawMinReturn]
+  );
+
+  const minReturnOutputAmount = useMemo(
+    () =>
+      outputToken && order.minReturn
+        ? CurrencyAmount.fromRawAmount(outputToken, order.minReturn)
+        : undefined,
+    [outputToken, order.minReturn]
+  );
+
+  const { gasPrice, realExecutionPrice } = useGasOverhead(
+    inputAmount,
+    outputAmount
+  );
+
+  const executionPrice = useMemo(
+    () =>
+      outputAmount && outputAmount.greaterThan(0) && inputAmount
+        ? new Price({
+            baseAmount: outputAmount,
+            quoteAmount: inputAmount,
+          })
+        : undefined,
+    [inputAmount, outputAmount]
+  );
+
+  const trade = useTradeExactIn(inputAmount, outputToken ?? undefined, handler);
+
+  const isSubmissionPending = useIsTransactionPending(order.createdTxHash);
+  const isCancellationPending = useIsTransactionPending(
+    order.cancelledTxHash ?? undefined
+  );
+
+  // modal and loading
+  const [
+    { showConfirm, cancellationErrorMessage, attemptingTxn, txHash },
+    setCancellationState,
+  ] = useState<{
+    showConfirm: boolean;
+    attemptingTxn: boolean;
+    cancellationErrorMessage: string | undefined;
+    txHash: string | undefined;
+  }>({
+    showConfirm: false,
+    attemptingTxn: false,
+    cancellationErrorMessage: undefined,
+    txHash: undefined,
+  });
+
+  const handleConfirmDismiss = useCallback(() => {
+    setCancellationState({
+      showConfirm: false,
+      attemptingTxn,
+      cancellationErrorMessage,
+      txHash,
+    });
+  }, [attemptingTxn, cancellationErrorMessage, txHash]);
+
+  const handleCancellation = useCallback(() => {
+    if (!handleLimitOrderCancellation) {
+      return;
+    }
+
+    setCancellationState({
+      attemptingTxn: true,
+      showConfirm,
+      cancellationErrorMessage: undefined,
+      txHash: undefined,
+    });
+
+    const orderDetails =
+      inputToken?.symbol && outputToken?.symbol && inputAmount && outputAmount
+        ? {
+            inputTokenSymbol: inputToken.symbol,
+            outputTokenSymbol: outputToken.symbol,
+            inputAmount: inputAmount.toSignificant(4),
+            outputAmount: outputAmount.toSignificant(4),
+          }
+        : undefined;
+
+    handleLimitOrderCancellation(order, orderDetails)
+      .then(({ hash }) => {
+        setCancellationState({
+          attemptingTxn: false,
+          showConfirm,
+          cancellationErrorMessage: undefined,
+          txHash: hash,
+        });
+      })
+      .catch((error) => {
+        setCancellationState({
+          attemptingTxn: false,
+          showConfirm,
+          cancellationErrorMessage: error.message,
+          txHash: undefined,
+        });
+      });
+  }, [
+    handleLimitOrderCancellation,
+    showConfirm,
+    inputToken,
+    outputToken,
+    inputAmount,
+    outputAmount,
+    order,
+  ]);
+
+  const expireDate = order.createdAt ? (
+    new Date(
+      (parseInt(order.createdAt) + constants.MAX_LIFETIME_IN_SECONDS) * 1000
+    ).toLocaleString([], {
+      year: "numeric",
+      month: "2-digit",
+      day: "numeric",
+    })
+  ) : (
+    <Dots />
+  );
+
+  const OrderCard = ({
+    showStatusButton = true,
+    hideInput = false,
+  }: {
+    showStatusButton?: boolean;
+    hideInput?: boolean;
+  }) => (
+    <OrderPanel>
+      <Container hideInput={hideInput}>
+        <RowBetween padding="10px">
+          {inputToken ? (
+            <CurrencySelect selected={true}>
+              <Aligner>
+                <CurrencyLogo
+                  currency={inputToken ?? undefined}
+                  size={"18px"}
+                />
+                <StyledTokenName>
+                  {inputToken?.symbol ?? <Dots />}
+                </StyledTokenName>
+              </Aligner>
+            </CurrencySelect>
+          ) : (
+            <Dots />
+          )}
+          <ArrowWrapper>
+            <ArrowRight size="16" color={theme.text1} />
+          </ArrowWrapper>
+          {outputToken ? (
+            <CurrencySelect selected={true}>
+              <Aligner>
+                <CurrencyLogo
+                  currency={outputToken ?? undefined}
+                  size={"18px"}
+                />
+                <StyledTokenName>
+                  {outputToken.symbol ?? <Dots />}
+                </StyledTokenName>
+              </Aligner>
+            </CurrencySelect>
+          ) : (
+            <Dots />
+          )}
+          <Spacer />
+          {showStatusButton ? (
+            <OrderStatus
+              clickable={true}
+              onClick={() => {
+                if (!chainId) return;
+
+                if (order.status === "open" && !isSubmissionPending)
+                  setCancellationState({
+                    attemptingTxn: false,
+                    cancellationErrorMessage: undefined,
+                    showConfirm: true,
+                    txHash: undefined,
+                  });
+                else if (order.status === "open" && isSubmissionPending)
+                  window.open(
+                    getExplorerLink(
+                      chainId,
+                      order.createdTxHash,
+                      ExplorerDataType.TRANSACTION
+                    ),
+                    "_blank"
+                  );
+                else if (order.status === "cancelled" && order.cancelledTxHash)
+                  window.open(
+                    getExplorerLink(
+                      chainId,
+                      order.cancelledTxHash,
+                      ExplorerDataType.TRANSACTION
+                    ),
+                    "_blank"
+                  );
+                else if (order.status === "executed" && order.executedTxHash)
+                  window.open(
+                    getExplorerLink(
+                      chainId,
+                      order.executedTxHash,
+                      ExplorerDataType.TRANSACTION
+                    ),
+                    "_blank"
+                  );
+              }}
+              status={
+                isCancellationPending || isSubmissionPending
+                  ? "pending"
+                  : order.status
+              }
+            >
+              {isSubmissionPending
+                ? "pending"
+                : isCancellationPending
+                ? "cancelling"
+                : order.status === "open"
+                ? "cancel"
+                : order.status}
+              {isSubmissionPending || isCancellationPending ? <Dots /> : null}
+            </OrderStatus>
+          ) : null}
+        </RowBetween>
+
+        <OrderRow>
+          <RowBetween>
+            <Text fontWeight={500} fontSize={14} color={theme.text1}>
+              {`Sell ${inputAmount ? inputAmount.toSignificant(4) : "-"} ${
+                inputAmount?.currency.symbol ?? ""
+              } for ${outputAmount ? outputAmount.toSignificant(4) : "-"} ${
+                outputAmount?.currency.symbol ?? ""
+              }`}
+            </Text>
+          </RowBetween>
+        </OrderRow>
+
+        <OrderRow style={{ height: "20px" }}>
+          <RowBetween>
+            <Text fontWeight={400} fontSize={12} color={theme.text1}>
+              Current price:
+            </Text>
+            {trade ? (
+              <TradePrice
+                price={trade.executionPrice}
+                showInverted={showCurrentPriceInverted}
+                setShowInverted={setShowCurrentPriceInverted}
+                fontWeight={500}
+                fontSize={12}
+              />
+            ) : (
+              <Dots />
+            )}
+          </RowBetween>
+        </OrderRow>
+
+        {order.status === "open" ? (
+          <>
+            <OrderRow style={{ height: "20px" }}>
+              <RowBetween>
+                <Text fontWeight={400} fontSize={12} color={theme.text1}>
+                  Execution price:
+                </Text>
+                {executionPrice ? (
+                  isTransactionCostDependentChainBool ? (
+                    <>
+                      <MouseoverTooltip
+                        text={`The execution price takes into account the gas necessary to execute your order and guarantees that your desired rate is fulfilled, so that the minimum you receive is ${
+                          outputAmount ? outputAmount.toSignificant(4) : "-"
+                        } ${
+                          outputAmount?.currency.symbol ?? ""
+                        }. It fluctuates according to gas prices. Current gas price: ${parseFloat(
+                          gasPrice ? formatUnits(gasPrice, "gwei") : "-"
+                        ).toFixed(0)} GWEI.`}
+                      >
+                        {realExecutionPrice ? (
+                          <TradePrice
+                            price={realExecutionPrice}
+                            showInverted={showRealExecutionPriceInverted}
+                            setShowInverted={setShowRealExecutionPriceInverted}
+                            fontWeight={500}
+                            fontSize={12}
+                          />
+                        ) : realExecutionPrice === undefined ? (
+                          <TYPE.body fontSize={14} color={theme.text2}>
+                            <HoverInlineText text={"never executes"} />
+                          </TYPE.body>
+                        ) : (
+                          <Dots />
+                        )}
+                      </MouseoverTooltip>
+                    </>
+                  ) : (
+                    <TradePrice
+                      price={executionPrice}
+                      showInverted={showExecutionPriceInverted}
+                      setShowInverted={setShowExecutionPriceInverted}
+                      fontWeight={500}
+                      fontSize={12}
+                    />
+                  )
+                ) : (
+                  <Dots />
+                )}
+              </RowBetween>
+            </OrderRow>
+            <OrderRow style={{ height: "20px" }}>
+              <RowBetween>
+                <MouseoverTooltip
+                  text={`The minimum amount you can receive. It includes all fees and maximum slippage tolerance.`}
+                >
+                  <Text fontWeight={400} fontSize={12} color={theme.text1}>
+                    Minimum Received:
+                  </Text>
+                </MouseoverTooltip>
+                <TYPE.black textAlign="right" fontSize={12} color={theme.text1}>
+                  {minReturnOutputAmount
+                    ? `${minReturnOutputAmount.toSignificant(4)} ${
+                        minReturnOutputAmount
+                          ? minReturnOutputAmount.currency.symbol
+                          : "-"
+                      }`
+                    : "-"}
+                </TYPE.black>
+              </RowBetween>
+            </OrderRow>
+            <OrderRow style={{ height: "20px" }}>
+              <RowBetween>
+                <Text fontWeight={400} fontSize={12} color={theme.text1}>
+                  Expiry Date:
+                </Text>
+                <TYPE.black textAlign="right" fontSize={12} color={theme.text1}>
+                  {expireDate}
+                </TYPE.black>
+              </RowBetween>
+            </OrderRow>
+          </>
+        ) : null}
+      </Container>
+    </OrderPanel>
+  );
+
+  return (
+    <>
+      <ConfirmCancellationModal
+        isOpen={showConfirm}
+        attemptingTxn={attemptingTxn}
+        txHash={txHash}
+        onConfirm={handleCancellation}
+        swapErrorMessage={cancellationErrorMessage}
+        onDismiss={handleConfirmDismiss}
+        topContent={() => (
+          <>
+            <br />
+            <OrderCard showStatusButton={false} hideInput={true} />
+            <br />
+          </>
+        )}
+      />
+      <OrderCard />
+    </>
+  );
+}
